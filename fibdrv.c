@@ -23,20 +23,35 @@ static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
 static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
+static ktime_t kt;
 
-static long long fib_sequence(long long k)
+static long long fib_fast_doubling(long long k)
 {
-    /* FIXME: use clz/ctz and fast algorithms to speed up */
-    long long f[k + 2];
-
-    f[0] = 0;
-    f[1] = 1;
-
-    for (int i = 2; i <= k; i++) {
-        f[i] = f[i - 1] + f[i - 2];
+    unsigned int n = 0;
+    if (k == 0) {
+        return 0;
+    } else if (k <= 2) {
+        return 1;
     }
 
-    return f[k];
+    if (k % 2) {
+        n = (k - 1) / 2;
+        return fib_fast_doubling(n) * fib_fast_doubling(n) +
+               fib_fast_doubling(n + 1) * fib_fast_doubling(n + 1);
+    } else {
+        n = k / 2;
+        return fib_fast_doubling(n) *
+               (2 * fib_fast_doubling(n + 1) - fib_fast_doubling(n));
+    }
+}
+
+static long long fib_time_proxy(long long k)
+{
+    kt = ktime_get();
+    long long result = fib_fast_doubling(k);
+    kt = ktime_sub(ktime_get(), kt);
+
+    return result;
 }
 
 static int fib_open(struct inode *inode, struct file *file)
@@ -60,7 +75,8 @@ static ssize_t fib_read(struct file *file,
                         size_t size,
                         loff_t *offset)
 {
-    return (ssize_t) fib_sequence(*offset);
+    // return (ssize_t) fib_sequence(*offset);
+    return (ssize_t) fib_time_proxy(*offset);
 }
 
 /* write operation is skipped */
@@ -69,7 +85,7 @@ static ssize_t fib_write(struct file *file,
                          size_t size,
                          loff_t *offset)
 {
-    return 1;
+    return ktime_to_ns(kt);
 }
 
 static loff_t fib_device_lseek(struct file *file, loff_t offset, int orig)

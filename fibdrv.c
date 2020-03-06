@@ -25,30 +25,79 @@ static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
 static ktime_t kt;
 
-static long long fib_fast_doubling(long long k)
+// static long long fib_fast_doubling(long long k)
+// {
+//     unsigned int n = 0;
+//     if (k == 0) {
+//         return 0;
+//     } else if (k <= 2) {
+//         return 1;
+//     }
+
+//     if (k % 2) {
+//         n = (k - 1) / 2;
+//         return fib_fast_doubling(n) * fib_fast_doubling(n) +
+//                fib_fast_doubling(n + 1) * fib_fast_doubling(n + 1);
+//     } else {
+//         n = k / 2;
+//         return fib_fast_doubling(n) *
+//                (2 * fib_fast_doubling(n + 1) - fib_fast_doubling(n));
+//     }
+// }
+
+static long long fib_fast_doubling_clz(long long k)
 {
     unsigned int n = 0;
-    if (k == 0) {
-        return 0;
-    } else if (k <= 2) {
-        return 1;
+    long long f_n = 0;
+    long long f_n_1 = 1;
+
+    if (k <= 0x00000000FFFFFFFF) {
+        n += 32;
+        k <<= 32;
+    }
+    if (k <= 0x0000FFFFFFFFFFFF) {
+        n += 16;
+        k <<= 16;
+    }
+    if (k <= 0x00FFFFFFFFFFFFFF) {
+        n += 8;
+        k <<= 8;
+    }
+    if (k <= 0x0FFFFFFFFFFFFFFF) {
+        n += 4;
+        k <<= 4;
+    }
+    if (k <= 0x3FFFFFFFFFFFFFFF) {
+        n += 2;
+        k <<= 2;
+    }
+    if (k <= 0x7FFFFFFFFFFFFFFF) {
+        n += 1;
+        k <<= 1;
+    }
+    n = 64 - n;
+
+    for (unsigned int i = 0; i < n; ++i) {
+        long long f_2n_1 = f_n * f_n + f_n_1 * f_n_1;
+        long long f_2n = f_n * (2 * f_n_1 - f_n);
+
+        if (k & 0x8000000000000000) {
+            f_n = f_2n_1;
+            f_n_1 = f_2n + f_2n_1;
+        } else {
+            f_n = f_2n;
+            f_n_1 = f_2n_1;
+        }
+        k <<= 1;
     }
 
-    if (k % 2) {
-        n = (k - 1) / 2;
-        return fib_fast_doubling(n) * fib_fast_doubling(n) +
-               fib_fast_doubling(n + 1) * fib_fast_doubling(n + 1);
-    } else {
-        n = k / 2;
-        return fib_fast_doubling(n) *
-               (2 * fib_fast_doubling(n + 1) - fib_fast_doubling(n));
-    }
+    return f_n;
 }
 
 static long long fib_time_proxy(long long k)
 {
     kt = ktime_get();
-    long long result = fib_fast_doubling(k);
+    long long result = fib_fast_doubling_clz(k);
     kt = ktime_sub(ktime_get(), kt);
 
     return result;

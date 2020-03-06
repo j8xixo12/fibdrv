@@ -32,7 +32,7 @@ int main()
                "%lld.\n",
                i, sz);
         sz = write(fd, write_buf, strlen(write_buf));
-        printf("Writing to " FIB_DEV ", returned the sequence %lld\n", sz);
+        // printf("Writing to " FIB_DEV ", returned the sequence %lld\n", sz);
         int length = snprintf(print_buf, BUF_LEN, "%d %lld\n", i, sz);
         if (length >= BUF_LEN) {
             close(fd);

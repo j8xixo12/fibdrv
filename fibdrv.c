@@ -7,6 +7,7 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 
+
 MODULE_LICENSE("Dual MIT/GPL");
 MODULE_AUTHOR("National Cheng Kung University, Taiwan");
 MODULE_DESCRIPTION("Fibonacci engine driver");
@@ -18,93 +19,160 @@ MODULE_VERSION("0.1");
  * ssize_t can't fit the number > 92
  */
 #define MAX_LENGTH 92
-
 static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
 static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
-static ktime_t kt;
+static ktime_t kt1, kt2;
+struct BigNum {
+    u64 lower;
+    u64 upper;
+};
+void BigNumber_Add(const struct BigNum *x,
+                   const struct BigNum *y,
+                   struct BigNum *output)
+{
+    output->upper = x->upper + y->upper;
 
-// static long long fib_fast_doubling(long long k)
-// {
-//     unsigned int n = 0;
-//     if (k == 0) {
-//         return 0;
-//     } else if (k <= 2) {
-//         return 1;
-//     }
+    if (y->lower > ~x->lower)
+        output->upper++;
 
-//     if (k % 2) {
-//         n = (k - 1) / 2;
-//         return fib_fast_doubling(n) * fib_fast_doubling(n) +
-//                fib_fast_doubling(n + 1) * fib_fast_doubling(n + 1);
-//     } else {
-//         n = k / 2;
-//         return fib_fast_doubling(n) *
-//                (2 * fib_fast_doubling(n + 1) - fib_fast_doubling(n));
-//     }
-// }
+    output->lower = x->lower + y->lower;
+    return;
+}
 
-static long long fib_fast_doubling_clz(long long k)
+void bit_shift_left(struct BigNum *x, uint8_t num)
+{
+    for (uint8_t i = 0; i < num; ++i) {
+        x->upper <<= 1;
+        if (x->lower & 0x8000000000000000) {
+            x->lower <<= 1;
+            x->upper++;
+        } else {
+            x->lower <<= 1;
+        }
+    }
+    return;
+}
+
+void bit_shift_right(struct BigNum *x, uint8_t num)
+{
+    for (uint8_t i = 0; i < num; ++i) {
+        x->lower >>= 1;
+        if (x->upper & 0x1) {
+            x->upper >>= 1;
+            x->lower += 0x8000000000000000;
+        } else {
+            x->upper >>= 1;
+        }
+    }
+    return;
+}
+
+void BigNumber_Mul(struct BigNum x, struct BigNum y, struct BigNum *output)
+{
+    uint8_t bit_shift = 0;
+    output->upper = 0;
+    output->lower = 0;
+    struct BigNum tmp = x;
+
+    while (y.lower != 0 || y.upper != 0) {
+        tmp = x;
+        if (y.lower & 1) {
+            bit_shift_left(&tmp, bit_shift);
+            BigNumber_Add(output, &tmp, output);
+        }
+        bit_shift++;
+        bit_shift_right(&y, 1);
+    }
+    return;
+}
+
+void BigNumber_Sub(const struct BigNum *x,
+                   const struct BigNum *y,
+                   struct BigNum *output)
+{
+    output->upper = x->upper - y->upper;
+
+    if (y->lower > x->lower) {
+        output->upper--;
+        output->lower = ~(x->lower << 63) - y->lower;
+        return;
+    }
+    output->lower = x->lower - y->lower;
+    return;
+}
+
+static struct BigNum fib_fast_doubling_clz(long long k)
 {
     unsigned int n = 0;
-    long long f_n = 0;
-    long long f_n_1 = 1;
+    struct BigNum f_n = {.lower = 0, .upper = 0};
+    struct BigNum f_n_1 = {.lower = 1, .upper = 0};
 
-    // if (k <= 0x00000000FFFFFFFF) {
-    //     n += 32;
-    //     k <<= 32;
-    // }
-    // if (k <= 0x0000FFFFFFFFFFFF) {
-    //     n += 16;
-    //     k <<= 16;
-    // }
-    // if (k <= 0x00FFFFFFFFFFFFFF) {
-    //     n += 8;
-    //     k <<= 8;
-    // }
-    // if (k <= 0x0FFFFFFFFFFFFFFF) {
-    //     n += 4;
-    //     k <<= 4;
-    // }
-    // if (k <= 0x3FFFFFFFFFFFFFFF) {
-    //     n += 2;
-    //     k <<= 2;
-    // }
-    // if (k <= 0x7FFFFFFFFFFFFFFF) {
-    //     n += 1;
-    //     k <<= 1;
-    // }
-
-    n = __builtin_clz(k);
-
+    n = __builtin_clzll(
+        k);  // __builtin_clz  only for unsigned int (32 bits) __builtin_clzll,
+             // ll means unsigned long long, so it is 64 bits
     k <<= n;
-
     n = 64 - n;
 
     for (unsigned int i = 0; i < n; ++i) {
-        long long f_2n_1 = f_n * f_n + f_n_1 * f_n_1;
-        long long f_2n = f_n * (2 * f_n_1 - f_n);
+        struct BigNum f_2n_1 = {.lower = 0, .upper = 0};
+        struct BigNum f_2n = {.lower = 0, .upper = 0};
+        struct BigNum tmp1 = {.lower = 0, .upper = 0};
+        struct BigNum tmp2 = {.lower = 0, .upper = 0};
+        struct BigNum tmp3 = {.lower = 0, .upper = 0};
+
+        BigNumber_Add(&f_n_1, &f_n_1, &tmp1);
+        BigNumber_Sub(&tmp1, &f_n, &tmp2);
+        BigNumber_Mul(f_n, tmp2, &f_2n);
+
+        BigNumber_Mul(f_n, f_n, &f_n);
+        BigNumber_Mul(f_n_1, f_n_1, &tmp3);
+        BigNumber_Add(&f_n, &tmp3, &f_2n_1);
 
         if (k & 0x8000000000000000) {
             f_n = f_2n_1;
-            f_n_1 = f_2n + f_2n_1;
+            BigNumber_Add(&f_2n, &f_2n_1, &f_n_1);
         } else {
             f_n = f_2n;
             f_n_1 = f_2n_1;
         }
         k <<= 1;
     }
-
     return f_n;
+}
+
+static long long fib_fast_doubling(long long k)
+{
+    unsigned int n = 0;
+    if (k == 0) {
+        return 0;
+    } else if (k <= 2) {
+        return 1;
+    }
+
+    if (k % 2) {
+        n = (k - 1) / 2;
+        return fib_fast_doubling(n) * fib_fast_doubling(n) +
+               fib_fast_doubling(n + 1) * fib_fast_doubling(n + 1);
+    } else {
+        n = k / 2;
+        return fib_fast_doubling(n) *
+               (2 * fib_fast_doubling(n + 1) - fib_fast_doubling(n));
+    }
 }
 
 static long long fib_time_proxy(long long k)
 {
-    kt = ktime_get();
-    long long result = fib_fast_doubling_clz(k);
-    kt = ktime_sub(ktime_get(), kt);
+    kt1 = ktime_get();
+    fib_fast_doubling_clz(k);
+    kt1 = ktime_sub(ktime_get(), kt1);
 
+    kt2 = ktime_get();
+    long long result = fib_fast_doubling(k);
+    kt2 = ktime_sub(ktime_get(), kt2);
+
+    printk(KERN_INFO "%lld %lld", ktime_to_ns(kt1), ktime_to_ns(kt2));
     return result;
 }
 
@@ -139,7 +207,7 @@ static ssize_t fib_write(struct file *file,
                          size_t size,
                          loff_t *offset)
 {
-    return ktime_to_ns(kt);
+    return 1;
 }
 
 static loff_t fib_device_lseek(struct file *file, loff_t offset, int orig)

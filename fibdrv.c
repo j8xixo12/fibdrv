@@ -6,6 +6,9 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/slab.h>
+#include <linux/types.h>
+#include <linux/uaccess.h>
 
 
 MODULE_LICENSE("Dual MIT/GPL");
@@ -18,12 +21,12 @@ MODULE_VERSION("0.1");
 /* MAX_LENGTH is set to 92 because
  * ssize_t can't fit the number > 92
  */
-#define MAX_LENGTH 92
+#define MAX_LENGTH 100
 static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
 static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
-static ktime_t kt1, kt2;
+
 struct BigNum {
     u64 lower;
     u64 upper;
@@ -72,13 +75,13 @@ void bit_shift_right(struct BigNum *x, uint8_t num)
 void BigNumber_Mul(struct BigNum x, struct BigNum y, struct BigNum *output)
 {
     uint8_t bit_shift = 0;
-    output->upper = 0;
-    output->lower = 0;
+    output->upper = 0ULL;
+    output->lower = 0ULL;
     struct BigNum tmp = x;
 
-    while (y.lower != 0 || y.upper != 0) {
+    while (y.lower != 0ULL || y.upper != 0ULL) {
         tmp = x;
-        if (y.lower & 1) {
+        if (y.lower & 1ULL) {
             bit_shift_left(&tmp, bit_shift);
             BigNumber_Add(output, &tmp, output);
         }
@@ -105,22 +108,22 @@ void BigNumber_Sub(const struct BigNum *x,
 
 static struct BigNum fib_fast_doubling_clz(long long k)
 {
-    unsigned int n = 0;
-    struct BigNum f_n = {.lower = 0, .upper = 0};
-    struct BigNum f_n_1 = {.lower = 1, .upper = 0};
-
+    unsigned int n = 0U;
+    struct BigNum f_n = {.lower = 0ULL, .upper = 0ULL};
+    struct BigNum f_n_1 = {.lower = 1ULL, .upper = 0ULL};
+    printk(KERN_INFO "k = : %lld\n", k);
     n = __builtin_clzll(
         k);  // __builtin_clz  only for unsigned int (32 bits) __builtin_clzll,
              // ll means unsigned long long, so it is 64 bits
     k <<= n;
-    n = 64 - n;
+    n = 64ULL - n;
 
     for (unsigned int i = 0; i < n; ++i) {
-        struct BigNum f_2n_1 = {.lower = 0, .upper = 0};
-        struct BigNum f_2n = {.lower = 0, .upper = 0};
-        struct BigNum tmp1 = {.lower = 0, .upper = 0};
-        struct BigNum tmp2 = {.lower = 0, .upper = 0};
-        struct BigNum tmp3 = {.lower = 0, .upper = 0};
+        struct BigNum f_2n_1 = {.lower = 0ULL, .upper = 0ULL};
+        struct BigNum f_2n = {.lower = 0ULL, .upper = 0ULL};
+        struct BigNum tmp1 = {.lower = 0ULL, .upper = 0ULL};
+        struct BigNum tmp2 = {.lower = 0ULL, .upper = 0ULL};
+        struct BigNum tmp3 = {.lower = 0ULL, .upper = 0ULL};
 
         BigNumber_Add(&f_n_1, &f_n_1, &tmp1);
         BigNumber_Sub(&tmp1, &f_n, &tmp2);
@@ -137,44 +140,30 @@ static struct BigNum fib_fast_doubling_clz(long long k)
             f_n = f_2n;
             f_n_1 = f_2n_1;
         }
-        k <<= 1;
+        k <<= 1ULL;
     }
     return f_n;
 }
 
-static long long fib_fast_doubling(long long k)
-{
-    unsigned int n = 0;
-    if (k == 0) {
-        return 0;
-    } else if (k <= 2) {
-        return 1;
-    }
+// static long long fib_fast_doubling(long long k)
+// {
+//     unsigned int n = 0;
+//     if (k == 0) {
+//         return 0;
+//     } else if (k <= 2) {
+//         return 1;
+//     }
 
-    if (k % 2) {
-        n = (k - 1) / 2;
-        return fib_fast_doubling(n) * fib_fast_doubling(n) +
-               fib_fast_doubling(n + 1) * fib_fast_doubling(n + 1);
-    } else {
-        n = k / 2;
-        return fib_fast_doubling(n) *
-               (2 * fib_fast_doubling(n + 1) - fib_fast_doubling(n));
-    }
-}
-
-static long long fib_time_proxy(long long k)
-{
-    kt1 = ktime_get();
-    fib_fast_doubling_clz(k);
-    kt1 = ktime_sub(ktime_get(), kt1);
-
-    kt2 = ktime_get();
-    long long result = fib_fast_doubling(k);
-    kt2 = ktime_sub(ktime_get(), kt2);
-
-    printk(KERN_INFO "%lld %lld", ktime_to_ns(kt1), ktime_to_ns(kt2));
-    return result;
-}
+//     if (k % 2) {
+//         n = (k - 1) / 2;
+//         return fib_fast_doubling(n) * fib_fast_doubling(n) +
+//                fib_fast_doubling(n + 1) * fib_fast_doubling(n + 1);
+//     } else {
+//         n = k / 2;
+//         return fib_fast_doubling(n) *
+//                (2 * fib_fast_doubling(n + 1) - fib_fast_doubling(n));
+//     }
+// }
 
 static int fib_open(struct inode *inode, struct file *file)
 {
@@ -197,8 +186,15 @@ static ssize_t fib_read(struct file *file,
                         size_t size,
                         loff_t *offset)
 {
-    // return (ssize_t) fib_sequence(*offset);
-    return (ssize_t) fib_time_proxy(*offset);
+    printk(KERN_INFO "Hello\n");
+    char *kbuf = (char *) kmalloc(sizeof(struct BigNum), GFP_KERNEL);
+
+    struct BigNum tmp = fib_fast_doubling_clz(*offset);
+
+    memcpy(kbuf, &tmp, size);
+
+    copy_to_user(buf, kbuf, size);
+    return 0;
 }
 
 /* write operation is skipped */
@@ -207,7 +203,7 @@ static ssize_t fib_write(struct file *file,
                          size_t size,
                          loff_t *offset)
 {
-    return 1;
+    return 0;
 }
 
 static loff_t fib_device_lseek(struct file *file, loff_t offset, int orig)
